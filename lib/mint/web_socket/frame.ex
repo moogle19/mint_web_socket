@@ -8,6 +8,65 @@ defmodule Mint.WebSocket.Frame do
   alias Mint.WebSocket.{Utils, Extension}
   alias Mint.WebSocketError
 
+  @typedoc """
+  Shorthand notations for control frames
+
+  * `:ping` - shorthand for `{:ping, ""}`
+  * `:pong` - shorthand for `{:pong, ""}`
+  * `:close` - shorthand for `{:close, nil, nil}`
+
+  These may be passed to `encode/2`. Frames decoded with `decode/2` are always
+  in `t:frame/0` format.
+  """
+  @type shorthand_frame :: :ping | :pong | :close
+
+  @typedoc """
+  A WebSocket frame
+
+  * `{:binary, binary}` - a frame containing binary data. Binary frames
+    can be used to send arbitrary binary data such as a PDF.
+  * `{:text, text}` - a frame containing string data. Text frames must be
+    valid utf8. Elixir has wonderful support for utf8: `String.valid?/1`
+    can detect valid and invalid utf8.
+  * `{:ping, binary}` - a control frame which the server should respond to
+    with a pong. The binary data must be echoed in the pong response.
+  * `{:pong, binary}` - a control frame which forms a reply to a ping frame.
+    Pings and pongs may be used to check the a connection is alive or to
+    estimate latency.
+  * `{:close, code, reason}` - a control frame used to request that a connection
+    be closed or to acknowledgee a close frame send by the server.
+
+  These may be passed to `encode/2` or returned from `decode/2`.
+
+  ## Close frames
+
+  In order to close a WebSocket connection gracefully, either the client or
+  server sends a close frame. Then the other endpoint responds with a
+  close with code `1_000` and then closes the TCP connection. This can be
+  accomplished in Mint.WebSocket like so:
+
+  ```elixir
+  {:ok, websocket, data} = Mint.WebSocket.encode(websocket, :close)
+  {:ok, conn} = Mint.WebSocket.stream_request_body(conn, ref, data)
+
+  close_response = receive(do: (message -> message))
+  {:ok, conn, [{:data, ^ref, data}]} = Mint.WebSocket.stream(conn, close_response)
+  {:ok, websocket, [{:close, 1_000, ""}]} = Mint.WebSocket.decode(websocket, data)
+
+  Mint.HTTP.close(conn)
+  ```
+
+  [rfc6455
+  section 7.4.1](https://datatracker.ietf.org/doc/html/rfc6455#section-7.4.1)
+  documents codes which may be used in the `code` element.
+  """
+  @type frame ::
+          {:text, String.t()}
+          | {:binary, binary()}
+          | {:ping, binary()}
+          | {:pong, binary()}
+          | {:close, code :: non_neg_integer() | nil, reason :: binary() | nil}
+
   @compile {:inline, apply_mask: 2, apply_mask: 3}
 
   shared = [{:reserved, <<0::size(3)>>}, :mask, :data, :fin?]
@@ -60,21 +119,22 @@ defmodule Mint.WebSocket.Frame do
 
   def new_mask, do: :crypto.strong_rand_bytes(4)
 
-  def encode(websocket, frame) when is_friendly_frame(frame) do
+  @spec encode(shorthand_frame() | frame(), [Extension.t()]) ::
+          {:ok, binary(), [Extension.t()]} | {:error, any()}
+  def encode(frame, extensions) when is_friendly_frame(frame) do
     {frame, extensions} =
       frame
       |> translate()
-      |> Extension.encode(websocket.extensions)
+      |> Extension.encode(extensions)
 
-    websocket = put_in(websocket.extensions, extensions)
     frame = encode_to_binary(frame)
 
-    {:ok, websocket, frame}
+    {:ok, frame, extensions}
   catch
-    :throw, {:mint, reason} -> {:error, websocket, reason}
+    :throw, {:mint, reason} -> {:error, reason}
   end
 
-  @spec encode_to_binary(tuple()) :: binary()
+  @spec encode_to_binary(shorthand_frame() | frame()) :: binary()
   defp encode_to_binary(frame) do
     payload = payload(frame)
     mask = mask(frame)
@@ -163,51 +223,51 @@ defmodule Mint.WebSocket.Frame do
 
   def apply_mask(<<>>, _mask, acc), do: acc
 
-  @spec decode(Mint.WebSocket.t(), binary()) ::
-          {:ok, Mint.WebSocket.t(), [Mint.WebSocket.frame() | {:error, term()}]}
-          | {:error, Mint.WebSocket.t(), any()}
-  def decode(websocket, data) do
-    {websocket, frames} = binary_to_frames(websocket, data)
+  @spec decode([binary()], binary()) ::
+          {:ok, [Extension.t()], [Mint.WebSocket.frame() | {:error, term()}]}
+          | {:error, any()}
+  def decode(frames, extensions) do
+    # {buffer, fragment, frames} =  binary_to_frames(fragment, buffer, data)
+    # {websocket, frames} = binary_to_frames(websocket, data)
 
-    {websocket, frames} =
-      Enum.reduce(frames, {websocket, []}, fn
-        {:error, reason}, {websocket, acc} ->
-          {websocket, [{:error, reason} | acc]}
+    {extensions, frames} =
+      Enum.reduce(frames, {extensions, []}, fn
+        {:error, reason}, {extensions, acc} ->
+          {extensions, [{:error, reason} | acc]}
 
-        frame, {websocket, acc} ->
-          {frame, extensions} = Extension.decode(frame, websocket.extensions)
+        frame, {extensions, acc} ->
+          {frame, extensions} = Extension.decode(frame, extensions)
 
-          {put_in(websocket.extensions, extensions), [translate(frame) | acc]}
+          {extensions, [translate(frame) | acc]}
       end)
 
-    {:ok, websocket, :lists.reverse(frames)}
+    {:ok, extensions, :lists.reverse(frames)}
   catch
-    {:mint, reason} -> {:error, websocket, reason}
+    {:mint, reason} -> {:error, reason}
   end
 
-  defp binary_to_frames(websocket, data) do
-    case websocket.buffer |> Utils.maybe_concat(data) |> decode_raw(websocket, []) do
+  def binary_to_frames(fragment, buffer, data) do
+    case buffer |> Utils.maybe_concat(data) |> decode_raw([]) do
       {:ok, frames} ->
-        {websocket, frames} = resolve_fragments(websocket, frames)
-        {put_in(websocket.buffer, <<>>), frames}
+        {fragment, frames} = resolve_fragments(fragment, frames)
+        {<<>>, fragment, frames}
 
       {:buffer, partial, frames} ->
-        {websocket, frames} = resolve_fragments(websocket, frames)
-        {put_in(websocket.buffer, partial), frames}
+        {fragment, frames} = resolve_fragments(fragment, frames)
+        {partial, fragment, frames}
     end
   end
 
   defp decode_raw(
          <<fin::size(1), reserved::bitstring-size(3), opcode::bitstring-size(4), masked::size(1),
            payload_and_mask::bitstring>> = data,
-         websocket,
          acc
        ) do
     case decode_payload_and_mask(payload_and_mask, masked == 0b1) do
       {:ok, payload, mask, rest} ->
         frame = decode_full_frame_binary(opcode, fin, reserved, mask, payload)
 
-        decode_raw(rest, websocket, [frame | acc])
+        decode_raw(rest, [frame | acc])
 
       {:error, reason} ->
         {:ok, :lists.reverse([{:error, reason} | acc])}
@@ -217,9 +277,9 @@ defmodule Mint.WebSocket.Frame do
     end
   end
 
-  defp decode_raw(<<>>, _websocket, acc), do: {:ok, :lists.reverse(acc)}
+  defp decode_raw(<<>>, acc), do: {:ok, :lists.reverse(acc)}
 
-  defp decode_raw(partial, _websocket, acc) when is_binary(partial) do
+  defp decode_raw(partial, acc) when is_binary(partial) do
     {:buffer, partial, :lists.reverse(acc)}
   end
 
@@ -400,37 +460,33 @@ defmodule Mint.WebSocket.Frame do
   Emits frames for any finalized fragments and stores any unfinalized fragments
   in the `:fragment` key in the websocket data structure
   """
-  def resolve_fragments(websocket, frames, acc \\ [])
+  def resolve_fragments(fragment, frames, acc \\ [])
 
-  def resolve_fragments(websocket, [], acc) do
-    {websocket, :lists.reverse(acc)}
+  def resolve_fragments(fragment, [], acc) do
+    {fragment, :lists.reverse(acc)}
   end
 
-  def resolve_fragments(websocket, [{:error, reason} | rest], acc) do
-    resolve_fragments(websocket, rest, [{:error, reason} | acc])
+  def resolve_fragments(fragment, [{:error, reason} | rest], acc) do
+    resolve_fragments(fragment, rest, [{:error, reason} | acc])
   end
 
-  def resolve_fragments(websocket, [frame | rest], acc)
+  def resolve_fragments(fragment, [frame | rest], acc)
       when is_control(frame) and is_fin(frame) do
-    resolve_fragments(websocket, rest, [frame | acc])
+    resolve_fragments(fragment, rest, [frame | acc])
   end
 
-  def resolve_fragments(websocket, [frame | rest], acc) when is_fin(frame) do
-    frame = combine(websocket.fragment, frame)
-
-    put_in(websocket.fragment, nil)
-    |> resolve_fragments(rest, [frame | acc])
+  def resolve_fragments(fragment, [frame | rest], acc) when is_fin(frame) do
+    frame = combine(fragment, frame)
+    resolve_fragments(nil, rest, [frame | acc])
   end
 
-  def resolve_fragments(websocket, [frame | rest], acc) do
-    case combine(websocket.fragment, frame) do
+  def resolve_fragments(fragment, [frame | rest], acc) do
+    case combine(fragment, frame) do
       {:error, reason} ->
-        put_in(websocket.fragment, nil)
-        |> resolve_fragments(rest, [{:error, reason} | acc])
+        resolve_fragments(nil, rest, [{:error, reason} | acc])
 
       frame ->
-        put_in(websocket.fragment, frame)
-        |> resolve_fragments(rest, acc)
+        resolve_fragments(frame, rest, acc)
     end
   end
 

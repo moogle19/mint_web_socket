@@ -131,65 +131,6 @@ defmodule Mint.WebSocket do
 
   @type error :: Mint.Types.error() | WebSocketError.t() | UpgradeFailureError.t()
 
-  @typedoc """
-  Shorthand notations for control frames
-
-  * `:ping` - shorthand for `{:ping, ""}`
-  * `:pong` - shorthand for `{:pong, ""}`
-  * `:close` - shorthand for `{:close, nil, nil}`
-
-  These may be passed to `encode/2`. Frames decoded with `decode/2` are always
-  in `t:frame/0` format.
-  """
-  @type shorthand_frame :: :ping | :pong | :close
-
-  @typedoc """
-  A WebSocket frame
-
-  * `{:binary, binary}` - a frame containing binary data. Binary frames
-    can be used to send arbitrary binary data such as a PDF.
-  * `{:text, text}` - a frame containing string data. Text frames must be
-    valid utf8. Elixir has wonderful support for utf8: `String.valid?/1`
-    can detect valid and invalid utf8.
-  * `{:ping, binary}` - a control frame which the server should respond to
-    with a pong. The binary data must be echoed in the pong response.
-  * `{:pong, binary}` - a control frame which forms a reply to a ping frame.
-    Pings and pongs may be used to check the a connection is alive or to
-    estimate latency.
-  * `{:close, code, reason}` - a control frame used to request that a connection
-    be closed or to acknowledgee a close frame send by the server.
-
-  These may be passed to `encode/2` or returned from `decode/2`.
-
-  ## Close frames
-
-  In order to close a WebSocket connection gracefully, either the client or
-  server sends a close frame. Then the other endpoint responds with a
-  close with code `1_000` and then closes the TCP connection. This can be
-  accomplished in Mint.WebSocket like so:
-
-  ```elixir
-  {:ok, websocket, data} = Mint.WebSocket.encode(websocket, :close)
-  {:ok, conn} = Mint.WebSocket.stream_request_body(conn, ref, data)
-
-  close_response = receive(do: (message -> message))
-  {:ok, conn, [{:data, ^ref, data}]} = Mint.WebSocket.stream(conn, close_response)
-  {:ok, websocket, [{:close, 1_000, ""}]} = Mint.WebSocket.decode(websocket, data)
-
-  Mint.HTTP.close(conn)
-  ```
-
-  [rfc6455
-  section 7.4.1](https://datatracker.ietf.org/doc/html/rfc6455#section-7.4.1)
-  documents codes which may be used in the `code` element.
-  """
-  @type frame ::
-          {:text, String.t()}
-          | {:binary, binary()}
-          | {:ping, binary()}
-          | {:pong, binary()}
-          | {:close, code :: non_neg_integer() | nil, reason :: binary() | nil}
-
   @doc """
   Requests that a connection be upgraded to the WebSocket protocol
 
@@ -519,8 +460,18 @@ defmodule Mint.WebSocket do
   {:ok, conn} = Mint.WebSocket.stream_request_body(conn, websocket_ref, data)
   ```
   """
-  @spec encode(t(), shorthand_frame() | frame()) :: {:ok, t(), binary()} | {:error, t(), any()}
-  defdelegate encode(websocket, frame), to: Frame
+  @spec encode(t(), Frame.shorthand_frame() | Frame.frame()) ::
+          {:ok, t(), binary()} | {:error, t(), any()}
+  def encode(websocket, frame) do
+    case Frame.encode(frame, websocket.extensions) do
+      {:ok, frame, extensions} ->
+        websocket = put_in(websocket.extensions, extensions)
+        {:ok, websocket, frame}
+
+      {:error, reason} ->
+        {:error, websocket, reason}
+    end
+  end
 
   @doc """
   Decodes a binary into a list of frames
@@ -539,8 +490,24 @@ defmodule Mint.WebSocket do
   ```
   """
   @spec decode(t(), data :: binary()) ::
-          {:ok, t(), [frame() | {:error, term()}]} | {:error, t(), any()}
-  defdelegate decode(websocket, data), to: Frame
+          {:ok, t(), [Frame.frame() | {:error, term()}]} | {:error, t(), any()}
+  def decode(websocket, data) do
+    IO.inspect(websocket.fragment, label: "Fragment")
+    IO.inspect(websocket.buffer, label: "Buffer")
+    {buffer, fragment, frames} = Frame.binary_to_frames(websocket.fragment, websocket.buffer, data)
+
+    websocket =  %{websocket | fragment: fragment, buffer: buffer}
+
+    case Frame.decode(frames, websocket.extensions) do
+      {:ok, extensions, frames} ->
+        {:ok, put_in(websocket.extensions, extensions), frames}
+
+      {:error, reason} ->
+        {:error, websocket, reason}
+    end
+  end
+
+  # defdelegate decode(websocket, data), to: Frame
 
   defp get_extensions(opts) do
     opts
