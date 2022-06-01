@@ -492,8 +492,6 @@ defmodule Mint.WebSocket do
   @spec decode(t(), data :: binary()) ::
           {:ok, t(), [Frame.frame() | {:error, term()}]} | {:error, t(), any()}
   def decode(websocket, data) do
-    IO.inspect(websocket.fragment, label: "Fragment")
-    IO.inspect(websocket.buffer, label: "Buffer")
     {buffer, fragment, frames} = Frame.binary_to_frames(websocket.fragment, websocket.buffer, data)
 
     websocket =  %{websocket | fragment: fragment, buffer: buffer}

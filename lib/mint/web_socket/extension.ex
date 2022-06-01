@@ -15,6 +15,7 @@ defmodule Mint.WebSocket.Extension do
   which are not documented.
   """
 
+  alias Mint.WebSocket.Frame
   alias Mint.WebSocketError
 
   @typedoc """
@@ -142,21 +143,21 @@ defmodule Mint.WebSocket.Extension do
 
   Error tuples bubble up to `Mint.WebSocket.encode/2`.
   """
-  @callback encode(frame :: tuple(), state :: term()) ::
-              {:ok, frame :: tuple(), state :: term()} | {:error, term()}
+  @callback encode(frame :: Frame.frame(), state :: term()) ::
+              {:ok, frame :: Frame.frame(), state :: term()} | {:error, term()}
 
   @doc """
   Invoked when decoding frames after receiving them from the wire
 
   Error tuples bubble up to `Mint.WebSocket.decode/2`.
   """
-  @callback decode(frame :: tuple(), state :: term()) ::
-              {:ok, frame :: tuple(), state :: term()} | {:error, term()}
+  @callback decode(frame :: Frame.frame(), state :: term()) ::
+              {:ok, frame :: Frame.frame(), state :: term()} | {:error, term()}
 
   defstruct [:name, :module, :state, opts: [], params: []]
 
   @doc false
-  @spec encode(tuple(), [t()]) :: {:ok, tuple(), [t()]} | {:error, term()}
+  @spec encode(Frame.frame(), [t()]) :: {:ok, Frame.frame(), [t()]} | {:error, term()}
   def encode(frame, extensions) do
     encode_all_extensions(frame, extensions, [])
   end
