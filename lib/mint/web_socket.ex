@@ -106,12 +106,13 @@ defmodule Mint.WebSocket do
   of bytes which must be sent over the network.
 
   See `Mint.WebSocket.Extension` for more information about extensions and
-  `Mint.WebSocket.PerMessageDeflate` for information about the
+  `WebSocket.PerMessageDeflate` for information about the
   "permessage-deflate" extension.
   """
 
-  alias __MODULE__.{Utils, Extension, Frame}
-  alias Mint.{WebSocketError, WebSocket.UpgradeFailureError}
+  alias WebSocket.{Utils, Extension, Frame}
+  alias WebSocket.UpgradeFailureError
+  alias Mint.WebSocketError
   alias Mint.{HTTP1, HTTP2}
   import Mint.HTTP, only: [get_private: 2, put_private: 3, protocol: 1]
 
@@ -172,7 +173,7 @@ defmodule Mint.WebSocket do
   ```elixir
   {:ok, conn} = Mint.HTTP.connect(:http, "localhost", 9_000)
   {:ok, conn, ref} =
-    Mint.WebSocket.upgrade(:ws, conn, "/", [], extensions: [Mint.WebSocket.PerMessageDeflate])
+    Mint.WebSocket.upgrade(:ws, conn, "/", [], extensions: [WebSocket.PerMessageDeflate])
   # or provide params:
   {:ok, conn, ref} =
     Mint.WebSocket.upgrade(
@@ -180,7 +181,7 @@ defmodule Mint.WebSocket do
       conn,
       "/",
       [],
-      extensions: [{Mint.WebSocket.PerMessageDeflate, [:client_max_window_bits]]}]
+      extensions: [{WebSocket.PerMessageDeflate, [:client_max_window_bits]]}]
     )
   ```
   """

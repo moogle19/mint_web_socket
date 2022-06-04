@@ -38,6 +38,7 @@ defmodule MintWebSocket.MixProject do
   defp deps do
     [
       {:mint, "~> 1.4 and >= 1.4.1"},
+      {:web_socket, github: "moogle19/web_socket", branch: "master"},
       {:ex_doc, "~> 0.24", only: [:dev], runtime: false},
       {:castore, ">= 0.0.0", only: [:dev]},
       {:jason, ">= 0.0.0", only: [:dev, :test]},

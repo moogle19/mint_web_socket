@@ -10,7 +10,7 @@ defmodule Mint.WebSocketError do
     quote do
       :extended_connect_disabled
       | :payload_too_large
-      | {:extension_not_negotiated, Mint.WebSocket.Extension.t()}
+      | {:extension_not_negotiated, WebSocket.Extension.t()}
     end
 
   @type t :: %__MODULE__{reason: unquote(reason_type) | term()}

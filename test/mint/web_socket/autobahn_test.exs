@@ -10,10 +10,10 @@ defmodule Mint.WebSocket.AutobahnTest do
   @moduletag :capture_log
 
   @extensions [
-    {~r"^12\.", [Mint.WebSocket.PerMessageDeflate]},
+    {~r"^12\.", [WebSocket.PerMessageDeflate]},
     {~r"^13\.",
      [
-       {Mint.WebSocket.PerMessageDeflate,
+       {WebSocket.PerMessageDeflate,
         [client_no_context_takeover: true, client_max_window_bits: true]}
      ]},
     {~r/.*/, []}
